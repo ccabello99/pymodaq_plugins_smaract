@@ -32,10 +32,10 @@ class DAQ_Move_SmarActMCS2(DAQ_Move_base):
     """
 
     is_multiaxes = True
-    axis_names= {'Axis 1': 0, 'Axis 2': 1, 'Axis 3': 2}
+    axis_names= {'Target X': 0, 'Target Y': 1, 'Target Rotation': 2}
 
-    _controller_units = {'Axis 1': 'um', 'Axis 2': 'um', 'Axis 3': 'um'}  #may be changed at initialization
-    _epsilon = {'Axis 1': 0.005, 'Axis 2': 0.005, 'Axis 3': 0.005}  # in _controller_units  precision tolerance for movement
+    _controller_units = {'Target X': 'um', 'Target Y': 'um', 'Target Rotation': 'degree'}  #may be changed at initialization
+    _epsilon = {'Target X': 0.005, 'Target Y': 0.005, 'Target Rotation': 5e-6}  # in _controller_units  precision tolerance for movement
 
     data_actuator_type = DataActuatorType.DataActuator
 
