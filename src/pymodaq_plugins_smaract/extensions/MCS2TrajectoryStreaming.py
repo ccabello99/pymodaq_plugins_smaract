@@ -145,9 +145,7 @@ class MCS2TrajConfig(Config):
 
 traj_config = MCS2TrajConfig()
 
-# ---------------------------------------------------------------------------
 # Frame encoding
-# ---------------------------------------------------------------------------
 def encode_frame(channel_positions: List[Tuple[int, int]]) -> bytes:
     """Pack one trajectory frame into the binary format expected by the MCS2.
 
@@ -170,9 +168,7 @@ def encode_frame(channel_positions: List[Tuple[int, int]]) -> bytes:
     return bytes(frame)
 
 
-# ---------------------------------------------------------------------------
 # Trajectory generators
-# ---------------------------------------------------------------------------
 def build_axis_move_trajectory(
         positions: np.ndarray,
         direction: np.ndarray,
@@ -274,10 +270,6 @@ def build_rotation_compensation_trajectory(
 
     return x_cmd, y_cmd, theta_arr
 
-
-# ===========================================================================
-# Extension class
-# ===========================================================================
 class MCS2TrajectoryStreaming(CustomExt):
     """PyMoDAQ extension for SmarAct MCS2 trajectory streaming."""
 
@@ -396,9 +388,7 @@ class MCS2TrajectoryStreaming(CustomExt):
         self.setup_ui()
 
 
-    # -----------------------------------------------------------------------
     # Dock / UI setup
-    # -----------------------------------------------------------------------
     def setup_docks(self):
         # Trajectory preview
         self.docks['preview'] = gutils.Dock('Trajectory Preview')
@@ -454,9 +444,7 @@ class MCS2TrajectoryStreaming(CustomExt):
         self.log_message('Extension initialised. Set the MCS2 module name '
                          'and click Refresh Module.')
 
-    # -----------------------------------------------------------------------
     # Stream Control dock
-    # -----------------------------------------------------------------------
     def _build_control_dock(self):
         ctrl_w = QtWidgets.QWidget()
         ctrl_lay = QtWidgets.QVBoxLayout()
@@ -509,9 +497,7 @@ class MCS2TrajectoryStreaming(CustomExt):
         ctrl_lay.addStretch()
         self.docks['control'].addWidget(ctrl_w)
 
-    # -----------------------------------------------------------------------
     # Arbitrary Axis Move dock
-    # -----------------------------------------------------------------------
     def _build_axis_move_dock(self):
         w = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout()
@@ -653,26 +639,51 @@ class MCS2TrajectoryStreaming(CustomExt):
         grid.addWidget(self._bold_label('Move parameters'), gr, 0, 1, 2)
         gr += 1
 
-        grid.addWidget(QtWidgets.QLabel('Distance d:'), gr, 0)
+        # Absolute / relative toggle
+        grid.addWidget(QtWidgets.QLabel('Move type:'), gr, 0)
+        _ax_move_type_w = QtWidgets.QWidget()
+        _ax_move_type_lay = QtWidgets.QHBoxLayout()
+        _ax_move_type_lay.setContentsMargins(0, 0, 0, 0)
+        _ax_move_type_w.setLayout(_ax_move_type_lay)
+        self.ax_abs_radio = QtWidgets.QRadioButton('Absolute')
+        self.ax_rel_radio = QtWidgets.QRadioButton('Relative')
+        self.ax_rel_radio.setChecked(True)
+        self.ax_abs_radio.setToolTip(
+            'Target is an absolute position along the direction vector (um).\n'
+            'The stage moves to: current + (target - current) * unit_v.\n'
+            'In practice this sets the signed distance from current position\n'
+            'to the target projected onto the direction vector.')
+        self.ax_rel_radio.setToolTip(
+            'Target is a signed distance to travel along the direction\n'
+            'vector (um), resolved from the current position at compute time.')
+        self.ax_abs_radio.toggled.connect(self._update_ax_value_label)
+        _ax_move_type_lay.addWidget(self.ax_abs_radio)
+        _ax_move_type_lay.addWidget(self.ax_rel_radio)
+        _ax_move_type_lay.addStretch()
+        grid.addWidget(_ax_move_type_w, gr, 1)
+        gr += 1
+
+        self.ax_value_label_lbl = QtWidgets.QLabel('Distance (um):')
+        grid.addWidget(self.ax_value_label_lbl, gr, 0)
         self.ax_dist_spin = QtWidgets.QDoubleSpinBox()
         self.ax_dist_spin.setRange(-1e9, 1e9)
         self.ax_dist_spin.setDecimals(4)
         self.ax_dist_spin.setSingleStep(1.0)
         self.ax_dist_spin.setValue(100.0)
         self.ax_dist_spin.setToolTip(
-            'Signed distance to travel along the direction vector '
-            '(same units as the stage, typically um).\n'
+            'Relative mode: signed distance to travel along v (um).\n'
             'Positive = forward along v, negative = backward.')
+        self.ax_dist_spin.valueChanged.connect(self._update_ax_frames_label)
         grid.addWidget(self.ax_dist_spin, gr, 1)
         gr += 1
 
-        grid.addWidget(QtWidgets.QLabel('N Frames:'), gr, 0)
-        self.ax_nframes_spin = QtWidgets.QSpinBox()
-        self.ax_nframes_spin.setRange(2, 1_000_000)
-        self.ax_nframes_spin.setValue(500)
-        self.ax_nframes_spin.setSingleStep(100)
-        self.ax_nframes_spin.setToolTip('Duration = N / Stream Rate')
-        grid.addWidget(self.ax_nframes_spin, gr, 1)
+        grid.addWidget(QtWidgets.QLabel('N Frames (auto):'), gr, 0)
+        self.ax_nframes_label = QtWidgets.QLabel('--')
+        self.ax_nframes_label.setStyleSheet('font-weight: bold;')
+        self.ax_nframes_label.setToolTip(
+            'Computed automatically: ceil(|distance| / 5 um per frame).\n'
+            'Minimum 2 frames.')
+        grid.addWidget(self.ax_nframes_label, gr, 1)
         gr += 1
 
         grid.addWidget(QtWidgets.QLabel('Duration (s):'), gr, 0)
@@ -682,10 +693,10 @@ class MCS2TrajectoryStreaming(CustomExt):
 
         lay.addLayout(grid)
 
-        self.ax_nframes_spin.valueChanged.connect(self._update_ax_duration)
+        self.ax_dist_spin.valueChanged.connect(self._update_ax_frames_label)
         self.settings.child('stream_settings', 'stream_rate'
-                             ).sigValueChanged.connect(self._update_ax_duration)
-        self._update_ax_duration()
+                             ).sigValueChanged.connect(self._update_ax_frames_label)
+        self._update_ax_frames_label()
         self._update_axis_norm_label()
 
         # Position read-back
@@ -725,9 +736,7 @@ class MCS2TrajectoryStreaming(CustomExt):
         lay.addStretch()
         self.docks['axis_move'].addWidget(w)
 
-    # -----------------------------------------------------------------------
     # Rotation Compensation dock
-    # -----------------------------------------------------------------------
     def _build_rotation_comp_dock(self):
         """Build the Rotation Compensation dock.
 
@@ -846,14 +855,13 @@ class MCS2TrajectoryStreaming(CustomExt):
         grid.addWidget(self.rc_theta_end_spin, row, 1)
         row += 1
 
-        grid.addWidget(QtWidgets.QLabel('N Frames:'), row, 0)
-        self.rc_nframes_spin = QtWidgets.QSpinBox()
-        self.rc_nframes_spin.setRange(2, 1_000_000)
-        self.rc_nframes_spin.setValue(500)
-        self.rc_nframes_spin.setSingleStep(100)
-        self.rc_nframes_spin.setToolTip('Duration = N / Stream Rate')
-        self.rc_nframes_spin.valueChanged.connect(self._update_rc_duration)
-        grid.addWidget(self.rc_nframes_spin, row, 1)
+        grid.addWidget(QtWidgets.QLabel('N Frames (auto):'), row, 0)
+        self.rc_nframes_label = QtWidgets.QLabel('--')
+        self.rc_nframes_label.setStyleSheet('font-weight: bold;')
+        self.rc_nframes_label.setToolTip(
+            'Computed automatically: ceil(|angle| / 5 m-deg per frame).\n'
+            'Minimum 2 frames.')
+        grid.addWidget(self.rc_nframes_label, row, 1)
         row += 1
 
         grid.addWidget(QtWidgets.QLabel('Duration (s):'), row, 0)
@@ -862,12 +870,14 @@ class MCS2TrajectoryStreaming(CustomExt):
         grid.addWidget(self.rc_duration_label, row, 1)
         row += 1
 
-        # Hook stream_rate changes
+        # Hook angle and stream_rate changes to update computed frames
+        self.rc_theta_end_spin.valueChanged.connect(self._update_rc_frames_label)
+        self.rc_abs_radio.toggled.connect(self._update_rc_frames_label)
         self.settings.child('stream_settings', 'stream_rate'
-                             ).sigValueChanged.connect(self._update_rc_duration)
+                             ).sigValueChanged.connect(self._update_rc_frames_label)
 
         lay.addLayout(grid)
-        self._update_rc_duration()
+        self._update_rc_frames_label()
 
         # ---- Position read-back ----
         lay.addWidget(self._build_pos_readback_group(
@@ -929,9 +939,7 @@ class MCS2TrajectoryStreaming(CustomExt):
         lay.addStretch()
         self.docks['rot_comp'].addWidget(w)
 
-    # -----------------------------------------------------------------------
     # UI helpers
-    # -----------------------------------------------------------------------
     def _build_pos_readback_group(
             self,
             labels: list,
@@ -973,18 +981,77 @@ class MCS2TrajectoryStreaming(CustomExt):
         return (f'background: {bg}; color: {fg}; '
                 f'border: 1px solid {border}; border-radius: 4px; padding: 8px;')
 
-    def _update_ax_duration(self):
+    # Step size constants for automatic frame count computation
+    _AX_STEP_UM    = 5.0    # um per frame for axis move
+    _RC_STEP_MDEG  = 5.0    # m-deg per frame for rotation compensation
+
+    def _ax_compute_nframes(self) -> int:
+        """Return the auto-computed frame count for the axis move.
+
+        n_frames = max(2, ceil(|distance| / _AX_STEP_UM))
+        """
+        import math
+        dist = abs(self.ax_dist_spin.value())
+        if dist == 0.0:
+            return 2
+        return max(2, math.ceil(dist / self._AX_STEP_UM))
+
+    def _rc_compute_nframes(self, theta_distance_mdeg: float) -> int:
+        """Return the auto-computed frame count for the rotation comp move.
+
+        n_frames = max(2, ceil(|angle| / _RC_STEP_MDEG))
+        """
+        import math
+        dist = abs(theta_distance_mdeg)
+        if dist == 0.0:
+            return 2
+        return max(2, math.ceil(dist / self._RC_STEP_MDEG))
+
+    def _update_ax_frames_label(self):
+        """Recompute and display the auto frame count for the axis move dock."""
         try:
-            n = self.ax_nframes_spin.value()
+            n = self._ax_compute_nframes()
             rate = self.settings['stream_settings', 'stream_rate']
+            self.ax_nframes_label.setText(str(n))
             self.ax_duration_label.setText(f'{n / rate:.3f} s')
         except Exception:
             pass
 
-    def _update_rc_duration(self):
+    def _update_ax_value_label(self):
+        """Update the distance/target label text when abs/rel mode changes."""
         try:
-            n = self.rc_nframes_spin.value()
+            if self.ax_abs_radio.isChecked():
+                self.ax_value_label_lbl.setText('Target pos (um):')
+                self.ax_dist_spin.setToolTip(
+                    'Absolute mode: target position along the direction vector (um).\n'
+                    'The signed distance will be computed as (target - current)\n'
+                    'projected onto the unit direction vector at compute time.')
+            else:
+                self.ax_value_label_lbl.setText('Distance (um):')
+                self.ax_dist_spin.setToolTip(
+                    'Relative mode: signed distance to travel along v (um).\n'
+                    'Positive = forward along v, negative = backward.')
+            self._update_ax_frames_label()
+        except Exception:
+            pass
+
+    def _update_rc_frames_label(self):
+        """Recompute and display the auto frame count for the RC dock.
+
+        The angle distance depends on abs/rel mode.  In relative mode the
+        spinbox value IS the distance.  In absolute mode we cannot know the
+        true distance without reading the hardware, so we use the spinbox
+        value as a conservative estimate (it equals the distance when starting
+        from 0, i.e. the worst case).
+        """
+        try:
+            angle_val = self.rc_theta_end_spin.value()
+            # In relative mode the spinbox value is the distance directly.
+            # In absolute mode we use the magnitude of the spinbox value as
+            # an estimate -- the real distance is resolved at compute time.
+            n = self._rc_compute_nframes(angle_val)
             rate = self.settings['stream_settings', 'stream_rate']
+            self.rc_nframes_label.setText(str(n))
             self.rc_duration_label.setText(f'{n / rate:.3f} s')
         except Exception:
             pass
@@ -1058,9 +1125,7 @@ class MCS2TrajectoryStreaming(CustomExt):
         except Exception:
             pass
 
-    # -----------------------------------------------------------------------
     # Toolbar actions
-    # -----------------------------------------------------------------------
     def setup_actions(self):
         self.add_action('quit', 'Quit', 'close2', 'Quit extension')
         self.add_action('load_file', 'Load File', 'load2',
@@ -1077,12 +1142,8 @@ class MCS2TrajectoryStreaming(CustomExt):
         if param.name() in ('master_name',):
             self.refresh_modules()
 
-    # -----------------------------------------------------------------------
     # Module access helpers
-    # -----------------------------------------------------------------------
-    # -----------------------------------------------------------------------
     # Module access helpers  (multi-module / master-slave architecture)
-    # -----------------------------------------------------------------------
     def refresh_modules(self):
         """Resolve all module names from Settings against dashboard modules.
 
@@ -1245,9 +1306,7 @@ class MCS2TrajectoryStreaming(CustomExt):
         """
         return int(round(value * 1e6))
 
-    # -----------------------------------------------------------------------
     # Rotation Compensation -- computation
-    # -----------------------------------------------------------------------
     def _compute_rotation_comp_trajectory(
             self,
     ) -> Optional[Tuple[np.ndarray, List]]:
@@ -1290,14 +1349,15 @@ class MCS2TrajectoryStreaming(CustomExt):
         if any(v is None for v in (x0, y0, th0)):
             return None
 
-        n_frames = self.rc_nframes_spin.value()
-
         # Resolve absolute vs relative target angle (both in m-deg)
         theta_input = self.rc_theta_end_spin.value()
         if self.rc_abs_radio.isChecked():
             theta_end_mdeg = theta_input
         else:
             theta_end_mdeg = th0 + theta_input
+
+        # Auto-compute frame count: 5 m-deg per frame on the actual travel distance
+        n_frames = self._rc_compute_nframes(theta_end_mdeg - th0)
 
         try:
             x_traj, y_traj, theta_traj = build_rotation_compensation_trajectory(
@@ -1381,9 +1441,7 @@ class MCS2TrajectoryStreaming(CustomExt):
             return
         self._start_stream_with_frames(frames)
 
-    # -----------------------------------------------------------------------
     # Arbitrary axis move
-    # -----------------------------------------------------------------------
     def _compute_axis_move_trajectory(
             self,
     ) -> Optional[Tuple[np.ndarray, List]]:
@@ -1470,8 +1528,21 @@ class MCS2TrajectoryStreaming(CustomExt):
             else:
                 cur_labels[i].setText('--')
 
-        n_frames = self.ax_nframes_spin.value()
-        distance = self.ax_dist_spin.value()
+        n_frames = self._ax_compute_nframes()
+
+        # In absolute mode the spinbox holds a target position along the
+        # direction vector; compute the signed distance from current position.
+        # In relative mode the spinbox IS the signed distance directly.
+        if self.ax_abs_radio.isChecked():
+            # Project current position onto the unit direction vector,
+            # then compute distance = target_along_v - current_along_v
+            norm = np.linalg.norm(v_full)
+            unit = v_full / norm if norm > 0 else v_full
+            current_along_v = float(np.dot(positions_full[active_mask],
+                                           unit[active_mask]))
+            distance = self.ax_dist_spin.value() - current_along_v
+        else:
+            distance = self.ax_dist_spin.value()
 
         try:
             traj = build_axis_move_trajectory(
@@ -1539,9 +1610,7 @@ class MCS2TrajectoryStreaming(CustomExt):
             return
         self._start_stream_with_frames(frames)
 
-    # -----------------------------------------------------------------------
     # File-based trajectory loading
-    # -----------------------------------------------------------------------
     def _delimiter_char(self) -> str:
         return {'comma': ',', 'tab': '\t', 'space': ' ',
                 'semicolon': ';'}.get(
@@ -1604,9 +1673,7 @@ class MCS2TrajectoryStreaming(CustomExt):
                 f'Preview capped at {max_rows} of {len(data)} frames.',
                 level='warning')
 
-    # -----------------------------------------------------------------------
     # Frame building
-    # -----------------------------------------------------------------------
     def _build_frames(self) -> List[bytes]:
         """File-mode frame builder: uses the Axis Mapping settings.
 
@@ -1661,9 +1728,7 @@ class MCS2TrajectoryStreaming(CustomExt):
             frames.append(encode_frame(ch_pos))
         return frames
 
-    # -----------------------------------------------------------------------
     # Streaming
-    # -----------------------------------------------------------------------
     def _refresh_stream_btn(self):
         ready = (self._master_module is not None and
                  self._trajectory is not None and
@@ -1920,9 +1985,7 @@ class MCS2TrajectoryStreaming(CustomExt):
         self._abort_event.set()
         self.log_message('Abort requested...', level='warning')
 
-    # -----------------------------------------------------------------------
     # Logging
-    # -----------------------------------------------------------------------
     @QtCore.Slot(str, str)
     def _on_log_signal(self, message: str, level: str):
         self.log_message(message, level=level)
@@ -1939,9 +2002,7 @@ class MCS2TrajectoryStreaming(CustomExt):
         getattr(logger, level if level in ('error', 'warning') else 'info')(
             message)
 
-    # -----------------------------------------------------------------------
     # Misc helpers
-    # -----------------------------------------------------------------------
     @staticmethod
     def _btn_style(col1: str, col2: str) -> str:
         return (
