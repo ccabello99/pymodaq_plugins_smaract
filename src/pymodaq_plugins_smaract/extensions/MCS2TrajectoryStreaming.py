@@ -44,39 +44,26 @@ are user-configurable; set any channel to -1 to exclude that axis.
 Rotation Compensation Move
 --------------------------
 The "Rotation Compensation" dock handles the case where an XY positioner is
-mounted on top of a rotation stage.  The calibration convention is that when
-both XY axes are at zero, the target of interest sits exactly on the rotation
-axis -- so a pure rotation is possible with no XY correction.
+mounted on top of a rotation stage.  The general model is:
 
-When the XY stage is displaced to (x0, y0) the target is off-axis by that
-amount (in the rotating body frame).  A subsequent rotation would carry the
-target in a circle.  The XY stage must compensate to keep the target fixed
-in the lab frame.
+    P_lab = R(theta) * (offset_body + xy_cmd)
 
-The exact closed-form solution (no small-angle approximation):
+where offset_body = (cx, cy) is the displacement from the rotation axis to
+the XY stage zero, expressed in the rotating body frame (um).  This is
+non-zero in the general case where XY=0 does not perfectly coincide with the
+rotation axis.
 
-    xy_cmd(theta) = R(θ0 - theta) * (x0, y0)
-
-where R is the 2-D rotation matrix and theta is in m-deg (the native unit).
-
-When x0 = y0 = 0 the correction vanishes identically -- pure rotation.
-
-These are more natural than Cartesian (cx, cy) in the lab frame because they
-are independent of the rotation stage's current angle.
-
-The body-frame offset vector is:
-
-    offset_body = R_offset * (cos(phi_offset), sin(phi_offset))
-
-The target position in the rotating body frame (constant throughout the move):
-
-    P_body = offset_body + (x0, y0)
-
-The required XY stage commands to keep the target fixed in the lab frame:
+The required XY compensation to keep P_lab fixed:
 
     xy_cmd(theta) = R(θ0 - theta) * P_body - offset_body
 
-where R(.) is the 2-D rotation matrix.  This is an exact closed-form solution.
+where P_body = offset_body + (x0, y0) is the target in the body frame.
+
+The offset is parameterised in polar coordinates (R_offset, phi_offset) in
+the body frame -- natural because R is the physical misalignment distance and
+phi is an angle independent of the current rotation stage position.  Both
+default to zero (ideal case).  Calibrate by rotating at XY=(0,0) and
+adjusting R and phi until the target holds still.
 
 Multi-module (master/slave) architecture
 -----------------------------------------
@@ -145,7 +132,9 @@ class MCS2TrajConfig(Config):
 
 traj_config = MCS2TrajConfig()
 
+# ---------------------------------------------------------------------------
 # Frame encoding
+# ---------------------------------------------------------------------------
 def encode_frame(channel_positions: List[Tuple[int, int]]) -> bytes:
     """Pack one trajectory frame into the binary format expected by the MCS2.
 
@@ -168,7 +157,9 @@ def encode_frame(channel_positions: List[Tuple[int, int]]) -> bytes:
     return bytes(frame)
 
 
+# ---------------------------------------------------------------------------
 # Trajectory generators
+# ---------------------------------------------------------------------------
 def build_axis_move_trajectory(
         positions: np.ndarray,
         direction: np.ndarray,
@@ -213,40 +204,48 @@ def build_rotation_compensation_trajectory(
         θ0_mdeg: float,
         theta_end_mdeg: float,
         n_frames: int,
+        cx: float = 0.0,
+        cy: float = 0.0,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Build a coordinated (X, Y, theta) trajectory that keeps the target
     fixed in the lab frame while the rotation stage sweeps.
 
     Physical model
     --------------
-    The XY stage sits on top of the rotation stage.  The zero position of the
-    XY stage corresponds to the target being exactly on the rotation axis.
-    This is the factory/user calibration: when XY = (0, 0), rotating freely
-    is a pure rotation with no sample displacement.
+    The XY stage sits on top of the rotation stage.  When the XY stage
+    commands (x_cmd, y_cmd), the target position in the lab frame is:
 
-    When the XY stage is at (x0, y0) != (0, 0) the target is displaced from
-    the rotation axis by (x0, y0) in the rotating body frame.  A rotation of
-    the bottom stage by Dtheta carries the target in a circle unless the XY stage
-    compensates.
+        P_lab = R(theta) * (offset_body + xy_cmd)
 
-    The target position in the lab frame is:
+    where offset_body = (cx, cy) is the displacement from the rotation axis
+    to the XY stage zero, expressed in the rotating body frame (um).
 
-        P_lab = R(theta) * (x_cmd, y_cmd)
+    This offset is non-zero when XY = (0, 0) does not perfectly coincide
+    with the rotation axis -- the common experimental case.  It must be
+    determined empirically (e.g. by rotating at XY = 0 and adjusting until
+    the target holds still).
 
-    where R(theta) is the 2-D rotation matrix.  To keep P_lab constant:
+    To keep P_lab constant throughout the sweep, solve for xy_cmd(theta):
 
-        (x_cmd, y_cmd) = R(θ0 - theta) * (x0, y0)
+        xy_cmd(theta) = R(θ0 - theta) * P_body - offset_body
+
+    where P_body = offset_body + (x0, y0) is the target in the body frame
+    (a constant throughout the move).
 
     Boundary checks:
-        theta = θ0  ->  (x_cmd, y_cmd) = R(0) * (x0, y0) = (x0, y0)  [ok]
-        x0 = y0 = 0    ->  (x_cmd, y_cmd) = (0, 0) for all theta  [ok] (pure rotation)
+        theta = θ0  ->  xy_cmd = P_body - offset_body = (x0, y0)           [ok]
+        x0 = y0 = 0 and cx = cy = 0  ->  xy_cmd = 0 for all theta          [ok]
+        x0 = y0 = 0, offset != 0  ->  xy_cmd = R(dθ)*offset - offset != 0  [ok, compensates misalignment]
 
     Parameters
     ----------
     x0, y0          : current XY stage positions (um)
-    θ0_mdeg     : current rotation angle (m-deg)
+    θ0_mdeg         : current rotation angle (m-deg)
     theta_end_mdeg  : target rotation angle (m-deg)
     n_frames        : number of trajectory frames (>= 2)
+    cx, cy          : body-frame offset from rotation axis to XY stage zero (um).
+                      Converted from polar (R_offset, phi_offset_deg) by the caller.
+                      Defaults to (0, 0) -- the ideal case.
 
     Returns
     -------
@@ -257,19 +256,28 @@ def build_rotation_compensation_trajectory(
     if n_frames < 2:
         raise ValueError('n_frames must be >= 2.')
 
-    theta_arr   = np.linspace(θ0_mdeg, theta_end_mdeg, n_frames)
-    θ0_rad  = np.deg2rad(θ0_mdeg / 1000.0)
-    theta_rad   = np.deg2rad(theta_arr   / 1000.0)
+    theta_arr = np.linspace(θ0_mdeg, theta_end_mdeg, n_frames)
+    θ0_rad    = np.deg2rad(θ0_mdeg / 1000.0)
+    theta_rad = np.deg2rad(theta_arr / 1000.0)
 
-    delta   = θ0_rad - theta_rad   # shape (n_frames,)
-    cos_d   = np.cos(delta)
-    sin_d   = np.sin(delta)
+    # Target in the body frame -- constant throughout the move
+    p_body_x = cx + x0
+    p_body_y = cy + y0
 
-    x_cmd   = cos_d * x0 - sin_d * y0
-    y_cmd   = sin_d * x0 + cos_d * y0
+    delta = θ0_rad - theta_rad   # shape (n_frames,)
+    cos_d = np.cos(delta)
+    sin_d = np.sin(delta)
+
+    # xy_cmd = R(θ0 - θ) * P_body - offset_body
+    x_cmd = cos_d * p_body_x - sin_d * p_body_y - cx
+    y_cmd = sin_d * p_body_x + cos_d * p_body_y - cy
 
     return x_cmd, y_cmd, theta_arr
 
+
+# ===========================================================================
+# Extension class
+# ===========================================================================
 class MCS2TrajectoryStreaming(CustomExt):
     """PyMoDAQ extension for SmarAct MCS2 trajectory streaming."""
 
@@ -388,7 +396,9 @@ class MCS2TrajectoryStreaming(CustomExt):
         self.setup_ui()
 
 
+    # -----------------------------------------------------------------------
     # Dock / UI setup
+    # -----------------------------------------------------------------------
     def setup_docks(self):
         # Trajectory preview
         self.docks['preview'] = gutils.Dock('Trajectory Preview')
@@ -444,7 +454,9 @@ class MCS2TrajectoryStreaming(CustomExt):
         self.log_message('Extension initialised. Set the MCS2 module name '
                          'and click Refresh Module.')
 
+    # -----------------------------------------------------------------------
     # Stream Control dock
+    # -----------------------------------------------------------------------
     def _build_control_dock(self):
         ctrl_w = QtWidgets.QWidget()
         ctrl_lay = QtWidgets.QVBoxLayout()
@@ -497,7 +509,9 @@ class MCS2TrajectoryStreaming(CustomExt):
         ctrl_lay.addStretch()
         self.docks['control'].addWidget(ctrl_w)
 
+    # -----------------------------------------------------------------------
     # Arbitrary Axis Move dock
+    # -----------------------------------------------------------------------
     def _build_axis_move_dock(self):
         w = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout()
@@ -673,17 +687,20 @@ class MCS2TrajectoryStreaming(CustomExt):
         self.ax_dist_spin.setToolTip(
             'Relative mode: signed distance to travel along v (um).\n'
             'Positive = forward along v, negative = backward.')
-        self.ax_dist_spin.valueChanged.connect(self._update_ax_frames_label)
         grid.addWidget(self.ax_dist_spin, gr, 1)
         gr += 1
 
-        grid.addWidget(QtWidgets.QLabel('N Frames (auto):'), gr, 0)
-        self.ax_nframes_label = QtWidgets.QLabel('--')
-        self.ax_nframes_label.setStyleSheet('font-weight: bold;')
-        self.ax_nframes_label.setToolTip(
-            'Computed automatically: ceil(|distance| / 5 um per frame).\n'
-            'Minimum 2 frames.')
-        grid.addWidget(self.ax_nframes_label, gr, 1)
+        grid.addWidget(QtWidgets.QLabel('N Frames:'), gr, 0)
+        self.ax_nframes_spin = QtWidgets.QSpinBox()
+        self.ax_nframes_spin.setRange(2, 1_000_000)
+        self.ax_nframes_spin.setValue(500)
+        self.ax_nframes_spin.setSingleStep(100)
+        self.ax_nframes_spin.setToolTip(
+            'Number of trajectory frames to stream.\n'
+            'More frames = smoother motion at a given stream rate.\n'
+            'Duration = N / Stream Rate.')
+        self.ax_nframes_spin.valueChanged.connect(self._update_ax_duration)
+        grid.addWidget(self.ax_nframes_spin, gr, 1)
         gr += 1
 
         grid.addWidget(QtWidgets.QLabel('Duration (s):'), gr, 0)
@@ -693,10 +710,9 @@ class MCS2TrajectoryStreaming(CustomExt):
 
         lay.addLayout(grid)
 
-        self.ax_dist_spin.valueChanged.connect(self._update_ax_frames_label)
         self.settings.child('stream_settings', 'stream_rate'
-                             ).sigValueChanged.connect(self._update_ax_frames_label)
-        self._update_ax_frames_label()
+                             ).sigValueChanged.connect(self._update_ax_duration)
+        self._update_ax_duration()
         self._update_axis_norm_label()
 
         # Position read-back
@@ -736,7 +752,9 @@ class MCS2TrajectoryStreaming(CustomExt):
         lay.addStretch()
         self.docks['axis_move'].addWidget(w)
 
+    # -----------------------------------------------------------------------
     # Rotation Compensation dock
+    # -----------------------------------------------------------------------
     def _build_rotation_comp_dock(self):
         """Build the Rotation Compensation dock.
 
@@ -815,6 +833,55 @@ class MCS2TrajectoryStreaming(CustomExt):
         grid.addWidget(sep, row, 0, 1, 2)
         row += 1
 
+        # ---- Axis alignment offset (body frame, polar) ----
+        grid.addWidget(self._bold_label('Axis alignment offset (body frame)'), row, 0, 1, 2)
+        row += 1
+
+        offset_info = QtWidgets.QLabel(
+            '<i style="color:#aaa">'
+            'Displacement from the rotation axis to the XY stage zero, in the '
+            'body frame (polar coords). Set to zero if XY=0 is perfectly on '
+            'the rotation axis. Tune R and phi experimentally: rotate at XY=0 '
+            'and adjust until the target holds still.'
+            '</i>'
+        )
+        offset_info.setWordWrap(True)
+        grid.addWidget(offset_info, row, 0, 1, 2)
+        row += 1
+
+        grid.addWidget(QtWidgets.QLabel('R offset (um):'), row, 0)
+        self.rc_r_spin = QtWidgets.QDoubleSpinBox()
+        self.rc_r_spin.setRange(0.0, 1e8)
+        self.rc_r_spin.setDecimals(1)
+        self.rc_r_spin.setSingleStep(100.0)
+        self.rc_r_spin.setValue(0.0)
+        self.rc_r_spin.setToolTip(
+            'Radial distance from the rotation axis to the XY stage zero position\n'
+            'in the rotating body frame (um).\n'
+            'Start at 0 (ideal) and increase if the target drifts during rotation\n'
+            'even when XY = (0, 0).')
+        grid.addWidget(self.rc_r_spin, row, 1)
+        row += 1
+
+        grid.addWidget(QtWidgets.QLabel('phi offset (deg):'), row, 0)
+        self.rc_phi_spin = QtWidgets.QDoubleSpinBox()
+        self.rc_phi_spin.setRange(-360.0, 360.0)
+        self.rc_phi_spin.setDecimals(2)
+        self.rc_phi_spin.setSingleStep(1.0)
+        self.rc_phi_spin.setValue(0.0)
+        self.rc_phi_spin.setToolTip(
+            'Angle of the offset vector in the body frame (degrees).\n'
+            'Measured from the body-frame X axis.\n'
+            'Tune this to set the direction of the rotation-axis misalignment.')
+        grid.addWidget(self.rc_phi_spin, row, 1)
+        row += 1
+
+        sep2 = QtWidgets.QFrame()
+        sep2.setFrameShape(QtWidgets.QFrame.HLine)
+        sep2.setStyleSheet('color: #444;')
+        grid.addWidget(sep2, row, 0, 1, 2)
+        row += 1
+
         # ---- Rotation parameters ----
         grid.addWidget(self._bold_label('Rotation parameters'), row, 0, 1, 2)
         row += 1
@@ -855,13 +922,17 @@ class MCS2TrajectoryStreaming(CustomExt):
         grid.addWidget(self.rc_theta_end_spin, row, 1)
         row += 1
 
-        grid.addWidget(QtWidgets.QLabel('N Frames (auto):'), row, 0)
-        self.rc_nframes_label = QtWidgets.QLabel('--')
-        self.rc_nframes_label.setStyleSheet('font-weight: bold;')
-        self.rc_nframes_label.setToolTip(
-            'Computed automatically: ceil(|angle| / 5 m-deg per frame).\n'
-            'Minimum 2 frames.')
-        grid.addWidget(self.rc_nframes_label, row, 1)
+        grid.addWidget(QtWidgets.QLabel('N Frames:'), row, 0)
+        self.rc_nframes_spin = QtWidgets.QSpinBox()
+        self.rc_nframes_spin.setRange(2, 1_000_000)
+        self.rc_nframes_spin.setValue(500)
+        self.rc_nframes_spin.setSingleStep(100)
+        self.rc_nframes_spin.setToolTip(
+            'Number of trajectory frames to stream.\n'
+            'More frames = smoother motion at a given stream rate.\n'
+            'Duration = N / Stream Rate.')
+        self.rc_nframes_spin.valueChanged.connect(self._update_rc_duration)
+        grid.addWidget(self.rc_nframes_spin, row, 1)
         row += 1
 
         grid.addWidget(QtWidgets.QLabel('Duration (s):'), row, 0)
@@ -870,14 +941,11 @@ class MCS2TrajectoryStreaming(CustomExt):
         grid.addWidget(self.rc_duration_label, row, 1)
         row += 1
 
-        # Hook angle and stream_rate changes to update computed frames
-        self.rc_theta_end_spin.valueChanged.connect(self._update_rc_frames_label)
-        self.rc_abs_radio.toggled.connect(self._update_rc_frames_label)
         self.settings.child('stream_settings', 'stream_rate'
-                             ).sigValueChanged.connect(self._update_rc_frames_label)
+                             ).sigValueChanged.connect(self._update_rc_duration)
 
         lay.addLayout(grid)
-        self._update_rc_frames_label()
+        self._update_rc_duration()
 
         # ---- Position read-back ----
         lay.addWidget(self._build_pos_readback_group(
@@ -905,8 +973,8 @@ class MCS2TrajectoryStreaming(CustomExt):
         for i, (label, attr) in enumerate([
             ('Max |DX| (um):', 'rc_stat_dx'),
             ('Max |DY| (um):', 'rc_stat_dy'),
-            ('|xy0| (um):', 'rc_stat_r'),
-            ('phi0 (m-deg):', 'rc_stat_phi'),
+            ('|P_body| (um):', 'rc_stat_r'),
+            ('phi_body (deg):', 'rc_stat_phi'),
         ]):
             r, c = divmod(i, 2)
             stats_lay.addWidget(QtWidgets.QLabel(label), r, c * 2)
@@ -939,7 +1007,9 @@ class MCS2TrajectoryStreaming(CustomExt):
         lay.addStretch()
         self.docks['rot_comp'].addWidget(w)
 
+    # -----------------------------------------------------------------------
     # UI helpers
+    # -----------------------------------------------------------------------
     def _build_pos_readback_group(
             self,
             labels: list,
@@ -981,38 +1051,11 @@ class MCS2TrajectoryStreaming(CustomExt):
         return (f'background: {bg}; color: {fg}; '
                 f'border: 1px solid {border}; border-radius: 4px; padding: 8px;')
 
-    # Step size constants for automatic frame count computation
-    _AX_STEP_UM    = 5.0    # um per frame for axis move
-    _RC_STEP_MDEG  = 5.0    # m-deg per frame for rotation compensation
-
-    def _ax_compute_nframes(self) -> int:
-        """Return the auto-computed frame count for the axis move.
-
-        n_frames = max(2, ceil(|distance| / _AX_STEP_UM))
-        """
-        import math
-        dist = abs(self.ax_dist_spin.value())
-        if dist == 0.0:
-            return 2
-        return max(2, math.ceil(dist / self._AX_STEP_UM))
-
-    def _rc_compute_nframes(self, theta_distance_mdeg: float) -> int:
-        """Return the auto-computed frame count for the rotation comp move.
-
-        n_frames = max(2, ceil(|angle| / _RC_STEP_MDEG))
-        """
-        import math
-        dist = abs(theta_distance_mdeg)
-        if dist == 0.0:
-            return 2
-        return max(2, math.ceil(dist / self._RC_STEP_MDEG))
-
-    def _update_ax_frames_label(self):
-        """Recompute and display the auto frame count for the axis move dock."""
+    def _update_ax_duration(self):
+        """Update the duration label in the axis move dock."""
         try:
-            n = self._ax_compute_nframes()
+            n = self.ax_nframes_spin.value()
             rate = self.settings['stream_settings', 'stream_rate']
-            self.ax_nframes_label.setText(str(n))
             self.ax_duration_label.setText(f'{n / rate:.3f} s')
         except Exception:
             pass
@@ -1031,27 +1074,14 @@ class MCS2TrajectoryStreaming(CustomExt):
                 self.ax_dist_spin.setToolTip(
                     'Relative mode: signed distance to travel along v (um).\n'
                     'Positive = forward along v, negative = backward.')
-            self._update_ax_frames_label()
         except Exception:
             pass
 
-    def _update_rc_frames_label(self):
-        """Recompute and display the auto frame count for the RC dock.
-
-        The angle distance depends on abs/rel mode.  In relative mode the
-        spinbox value IS the distance.  In absolute mode we cannot know the
-        true distance without reading the hardware, so we use the spinbox
-        value as a conservative estimate (it equals the distance when starting
-        from 0, i.e. the worst case).
-        """
+    def _update_rc_duration(self):
+        """Update the duration label in the rotation compensation dock."""
         try:
-            angle_val = self.rc_theta_end_spin.value()
-            # In relative mode the spinbox value is the distance directly.
-            # In absolute mode we use the magnitude of the spinbox value as
-            # an estimate -- the real distance is resolved at compute time.
-            n = self._rc_compute_nframes(angle_val)
+            n = self.rc_nframes_spin.value()
             rate = self.settings['stream_settings', 'stream_rate']
-            self.rc_nframes_label.setText(str(n))
             self.rc_duration_label.setText(f'{n / rate:.3f} s')
         except Exception:
             pass
@@ -1125,7 +1155,9 @@ class MCS2TrajectoryStreaming(CustomExt):
         except Exception:
             pass
 
+    # -----------------------------------------------------------------------
     # Toolbar actions
+    # -----------------------------------------------------------------------
     def setup_actions(self):
         self.add_action('quit', 'Quit', 'close2', 'Quit extension')
         self.add_action('load_file', 'Load File', 'load2',
@@ -1142,8 +1174,12 @@ class MCS2TrajectoryStreaming(CustomExt):
         if param.name() in ('master_name',):
             self.refresh_modules()
 
+    # -----------------------------------------------------------------------
     # Module access helpers
+    # -----------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Module access helpers  (multi-module / master-slave architecture)
+    # -----------------------------------------------------------------------
     def refresh_modules(self):
         """Resolve all module names from Settings against dashboard modules.
 
@@ -1306,7 +1342,9 @@ class MCS2TrajectoryStreaming(CustomExt):
         """
         return int(round(value * 1e6))
 
+    # -----------------------------------------------------------------------
     # Rotation Compensation -- computation
+    # -----------------------------------------------------------------------
     def _compute_rotation_comp_trajectory(
             self,
     ) -> Optional[Tuple[np.ndarray, List]]:
@@ -1349,6 +1387,12 @@ class MCS2TrajectoryStreaming(CustomExt):
         if any(v is None for v in (x0, y0, th0)):
             return None
 
+        # Read axis alignment offset (polar, body frame) -> Cartesian (um)
+        r_offset   = self.rc_r_spin.value()               # um
+        phi_offset = np.deg2rad(self.rc_phi_spin.value()) # rad
+        cx = r_offset * np.cos(phi_offset)
+        cy = r_offset * np.sin(phi_offset)
+
         # Resolve absolute vs relative target angle (both in m-deg)
         theta_input = self.rc_theta_end_spin.value()
         if self.rc_abs_radio.isChecked():
@@ -1356,8 +1400,7 @@ class MCS2TrajectoryStreaming(CustomExt):
         else:
             theta_end_mdeg = th0 + theta_input
 
-        # Auto-compute frame count: 5 m-deg per frame on the actual travel distance
-        n_frames = self._rc_compute_nframes(theta_end_mdeg - th0)
+        n_frames = self.rc_nframes_spin.value()
 
         try:
             x_traj, y_traj, theta_traj = build_rotation_compensation_trajectory(
@@ -1366,6 +1409,8 @@ class MCS2TrajectoryStreaming(CustomExt):
                 θ0_mdeg=th0,
                 theta_end_mdeg=theta_end_mdeg,
                 n_frames=n_frames,
+                cx=cx,
+                cy=cy,
             )
         except ValueError as e:
             self.log_message(str(e), level='error')
@@ -1385,14 +1430,16 @@ class MCS2TrajectoryStreaming(CustomExt):
         self.rc_yt_label.setText(f'{float(y_traj[-1]):.3f}')
         self.rc_tht_label.setText(f'{theta_end_mdeg:.1f}')
 
-        # Trajectory statistics
-        xy0_r = np.sqrt(x0**2 + y0**2)
-        phi0_mdeg = np.degrees(np.arctan2(y0, x0)) * 1000.0
+        # Trajectory statistics: report P_body (effective target offset from axis)
+        p_body_x = cx + x0
+        p_body_y = cy + y0
+        p_body_r = np.sqrt(p_body_x**2 + p_body_y**2)
+        p_body_phi_deg = np.degrees(np.arctan2(p_body_y, p_body_x))
 
         self.rc_stat_dx.setText(f'{float(np.max(np.abs(x_traj - x0))):.3f}')
         self.rc_stat_dy.setText(f'{float(np.max(np.abs(y_traj - y0))):.3f}')
-        self.rc_stat_r.setText(f'{xy0_r:.3f}')
-        self.rc_stat_phi.setText(f'{phi0_mdeg:.1f}')
+        self.rc_stat_r.setText(f'{p_body_r:.3f}')
+        self.rc_stat_phi.setText(f'{p_body_phi_deg:.2f}')
 
         x_name  = self.rc_x_mod_edit.text().strip()
         y_name  = self.rc_y_mod_edit.text().strip()
@@ -1401,7 +1448,8 @@ class MCS2TrajectoryStreaming(CustomExt):
             f'Rotation comp: {x_name} x0={x0:.3f} um, '
             f'{y_name} y0={y0:.3f} um, '
             f'{th_name} theta0={th0:.1f} m-deg -> theta_end={theta_end_mdeg:.1f} m-deg, '
-            f'|xy0|={xy0_r:.3f} um, {n_frames} frames.')
+            f'offset R={r_offset:.1f} um phi={np.degrees(phi_offset):.2f} deg, '
+            f'|P_body|={p_body_r:.3f} um, {n_frames} frames.')
 
         return traj, channel_map
 
@@ -1441,7 +1489,9 @@ class MCS2TrajectoryStreaming(CustomExt):
             return
         self._start_stream_with_frames(frames)
 
+    # -----------------------------------------------------------------------
     # Arbitrary axis move
+    # -----------------------------------------------------------------------
     def _compute_axis_move_trajectory(
             self,
     ) -> Optional[Tuple[np.ndarray, List]]:
@@ -1528,7 +1578,7 @@ class MCS2TrajectoryStreaming(CustomExt):
             else:
                 cur_labels[i].setText('--')
 
-        n_frames = self._ax_compute_nframes()
+        n_frames = self.ax_nframes_spin.value()
 
         # In absolute mode the spinbox holds a target position along the
         # direction vector; compute the signed distance from current position.
@@ -1610,7 +1660,9 @@ class MCS2TrajectoryStreaming(CustomExt):
             return
         self._start_stream_with_frames(frames)
 
+    # -----------------------------------------------------------------------
     # File-based trajectory loading
+    # -----------------------------------------------------------------------
     def _delimiter_char(self) -> str:
         return {'comma': ',', 'tab': '\t', 'space': ' ',
                 'semicolon': ';'}.get(
@@ -1673,7 +1725,9 @@ class MCS2TrajectoryStreaming(CustomExt):
                 f'Preview capped at {max_rows} of {len(data)} frames.',
                 level='warning')
 
+    # -----------------------------------------------------------------------
     # Frame building
+    # -----------------------------------------------------------------------
     def _build_frames(self) -> List[bytes]:
         """File-mode frame builder: uses the Axis Mapping settings.
 
@@ -1728,7 +1782,9 @@ class MCS2TrajectoryStreaming(CustomExt):
             frames.append(encode_frame(ch_pos))
         return frames
 
+    # -----------------------------------------------------------------------
     # Streaming
+    # -----------------------------------------------------------------------
     def _refresh_stream_btn(self):
         ready = (self._master_module is not None and
                  self._trajectory is not None and
@@ -1985,7 +2041,9 @@ class MCS2TrajectoryStreaming(CustomExt):
         self._abort_event.set()
         self.log_message('Abort requested...', level='warning')
 
+    # -----------------------------------------------------------------------
     # Logging
+    # -----------------------------------------------------------------------
     @QtCore.Slot(str, str)
     def _on_log_signal(self, message: str, level: str):
         self.log_message(message, level=level)
@@ -2002,7 +2060,9 @@ class MCS2TrajectoryStreaming(CustomExt):
         getattr(logger, level if level in ('error', 'warning') else 'info')(
             message)
 
+    # -----------------------------------------------------------------------
     # Misc helpers
+    # -----------------------------------------------------------------------
     @staticmethod
     def _btn_style(col1: str, col2: str) -> str:
         return (
