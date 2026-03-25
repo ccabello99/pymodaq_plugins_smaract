@@ -132,9 +132,7 @@ class MCS2TrajConfig(Config):
 
 traj_config = MCS2TrajConfig()
 
-# ---------------------------------------------------------------------------
 # Frame encoding
-# ---------------------------------------------------------------------------
 def encode_frame(channel_positions: List[Tuple[int, int]]) -> bytes:
     """Pack one trajectory frame into the binary format expected by the MCS2.
 
@@ -157,9 +155,7 @@ def encode_frame(channel_positions: List[Tuple[int, int]]) -> bytes:
     return bytes(frame)
 
 
-# ---------------------------------------------------------------------------
 # Trajectory generators
-# ---------------------------------------------------------------------------
 def build_axis_move_trajectory(
         positions: np.ndarray,
         direction: np.ndarray,
@@ -275,9 +271,6 @@ def build_rotation_compensation_trajectory(
     return x_cmd, y_cmd, theta_arr
 
 
-# ===========================================================================
-# Extension class
-# ===========================================================================
 class MCS2TrajectoryStreaming(CustomExt):
     """PyMoDAQ extension for SmarAct MCS2 trajectory streaming."""
 
@@ -396,9 +389,7 @@ class MCS2TrajectoryStreaming(CustomExt):
         self.setup_ui()
 
 
-    # -----------------------------------------------------------------------
     # Dock / UI setup
-    # -----------------------------------------------------------------------
     def setup_docks(self):
         # Trajectory preview
         self.docks['preview'] = gutils.Dock('Trajectory Preview')
@@ -454,9 +445,7 @@ class MCS2TrajectoryStreaming(CustomExt):
         self.log_message('Extension initialised. Set the MCS2 module name '
                          'and click Refresh Module.')
 
-    # -----------------------------------------------------------------------
     # Stream Control dock
-    # -----------------------------------------------------------------------
     def _build_control_dock(self):
         ctrl_w = QtWidgets.QWidget()
         ctrl_lay = QtWidgets.QVBoxLayout()
@@ -509,9 +498,7 @@ class MCS2TrajectoryStreaming(CustomExt):
         ctrl_lay.addStretch()
         self.docks['control'].addWidget(ctrl_w)
 
-    # -----------------------------------------------------------------------
     # Arbitrary Axis Move dock
-    # -----------------------------------------------------------------------
     def _build_axis_move_dock(self):
         w = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout()
@@ -752,9 +739,7 @@ class MCS2TrajectoryStreaming(CustomExt):
         lay.addStretch()
         self.docks['axis_move'].addWidget(w)
 
-    # -----------------------------------------------------------------------
     # Rotation Compensation dock
-    # -----------------------------------------------------------------------
     def _build_rotation_comp_dock(self):
         """Build the Rotation Compensation dock.
 
@@ -1007,9 +992,7 @@ class MCS2TrajectoryStreaming(CustomExt):
         lay.addStretch()
         self.docks['rot_comp'].addWidget(w)
 
-    # -----------------------------------------------------------------------
     # UI helpers
-    # -----------------------------------------------------------------------
     def _build_pos_readback_group(
             self,
             labels: list,
@@ -1155,9 +1138,7 @@ class MCS2TrajectoryStreaming(CustomExt):
         except Exception:
             pass
 
-    # -----------------------------------------------------------------------
     # Toolbar actions
-    # -----------------------------------------------------------------------
     def setup_actions(self):
         self.add_action('quit', 'Quit', 'close2', 'Quit extension')
         self.add_action('load_file', 'Load File', 'load2',
@@ -1174,12 +1155,8 @@ class MCS2TrajectoryStreaming(CustomExt):
         if param.name() in ('master_name',):
             self.refresh_modules()
 
-    # -----------------------------------------------------------------------
     # Module access helpers
-    # -----------------------------------------------------------------------
-    # -----------------------------------------------------------------------
     # Module access helpers  (multi-module / master-slave architecture)
-    # -----------------------------------------------------------------------
     def refresh_modules(self):
         """Resolve all module names from Settings against dashboard modules.
 
@@ -1342,9 +1319,7 @@ class MCS2TrajectoryStreaming(CustomExt):
         """
         return int(round(value * 1e6))
 
-    # -----------------------------------------------------------------------
     # Rotation Compensation -- computation
-    # -----------------------------------------------------------------------
     def _compute_rotation_comp_trajectory(
             self,
     ) -> Optional[Tuple[np.ndarray, List]]:
@@ -1489,9 +1464,7 @@ class MCS2TrajectoryStreaming(CustomExt):
             return
         self._start_stream_with_frames(frames)
 
-    # -----------------------------------------------------------------------
     # Arbitrary axis move
-    # -----------------------------------------------------------------------
     def _compute_axis_move_trajectory(
             self,
     ) -> Optional[Tuple[np.ndarray, List]]:
@@ -1660,9 +1633,7 @@ class MCS2TrajectoryStreaming(CustomExt):
             return
         self._start_stream_with_frames(frames)
 
-    # -----------------------------------------------------------------------
     # File-based trajectory loading
-    # -----------------------------------------------------------------------
     def _delimiter_char(self) -> str:
         return {'comma': ',', 'tab': '\t', 'space': ' ',
                 'semicolon': ';'}.get(
@@ -1725,9 +1696,7 @@ class MCS2TrajectoryStreaming(CustomExt):
                 f'Preview capped at {max_rows} of {len(data)} frames.',
                 level='warning')
 
-    # -----------------------------------------------------------------------
     # Frame building
-    # -----------------------------------------------------------------------
     def _build_frames(self) -> List[bytes]:
         """File-mode frame builder: uses the Axis Mapping settings.
 
@@ -1782,9 +1751,7 @@ class MCS2TrajectoryStreaming(CustomExt):
             frames.append(encode_frame(ch_pos))
         return frames
 
-    # -----------------------------------------------------------------------
     # Streaming
-    # -----------------------------------------------------------------------
     def _refresh_stream_btn(self):
         ready = (self._master_module is not None and
                  self._trajectory is not None and
@@ -2041,9 +2008,7 @@ class MCS2TrajectoryStreaming(CustomExt):
         self._abort_event.set()
         self.log_message('Abort requested...', level='warning')
 
-    # -----------------------------------------------------------------------
     # Logging
-    # -----------------------------------------------------------------------
     @QtCore.Slot(str, str)
     def _on_log_signal(self, message: str, level: str):
         self.log_message(message, level=level)
@@ -2060,9 +2025,7 @@ class MCS2TrajectoryStreaming(CustomExt):
         getattr(logger, level if level in ('error', 'warning') else 'info')(
             message)
 
-    # -----------------------------------------------------------------------
     # Misc helpers
-    # -----------------------------------------------------------------------
     @staticmethod
     def _btn_style(col1: str, col2: str) -> str:
         return (
