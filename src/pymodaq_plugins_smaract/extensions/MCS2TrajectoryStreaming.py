@@ -111,7 +111,7 @@ from pathlib import Path
 from typing import Optional, List, Tuple
 
 import numpy as np
-from qtpy import QtWidgets, QtCore
+from qtpy import QtWidgets, QtCore, QtGui
 
 from pymodaq_gui import utils as gutils
 from pymodaq_utils.config import Config
@@ -502,117 +502,89 @@ class MCS2TrajectoryStreaming(CustomExt):
     def _build_axis_move_dock(self):
         w = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout()
-        lay.setSpacing(8)
+        lay.setSpacing(2)
         w.setLayout(lay)
 
-        info = QtWidgets.QLabel(
+        # ── Help toggle ───────────────────────────────────────────────────────
+        _ax_help_btn, _ax_help_panel = self._make_help_toggle(
             '<b>On-the-fly arbitrary-axis linear move</b><br>'
-            'Define a direction vector and move the stage from its current '
-            'position by distance <i>d</i> along that direction.<br><br>'
-            'The direction vector can be expressed in the <b>lab frame</b> '
-            '(default) or in the <b>XY stage body frame</b>.  In body-frame '
-            'mode the vector is rotated by the current rotation-stage angle '
-            'before use, so the motion direction is always the same relative '
-            'to the sample regardless of how the rotation stage is oriented.<br><br>'
-            '<tt>v_lab = R(θ0) * v_body</tt>'
-        )
-        info.setWordWrap(True)
-        info.setStyleSheet(self._info_style('#1a2e1a', '#a0e8a0', '#2c6a2c'))
-        lay.addWidget(info)
+            'Move the stage from its current position by distance <i>d</i> '
+            'along a direction vector (v1, v2, v3).<br><br>'
+            'Use <b>lab frame</b> (default) or <b>body frame</b> -- in body '
+            'mode the vector is pre-rotated by the current rotation angle so '
+            'the motion direction is fixed relative to the sample.<br>'
+            '<tt>v_lab = R(theta0) * v_body</tt>',
+            ('#1a2e1a', '#a0e8a0', '#2c6a2c'))
+        _ax_help_row = QtWidgets.QHBoxLayout()
+        _ax_help_row.addWidget(_ax_help_btn)
+        _ax_help_row.addStretch()
+        lay.addLayout(_ax_help_row)
+        lay.addWidget(_ax_help_panel)
 
-        grid = QtWidgets.QGridLayout()
-        grid.setColumnStretch(1, 1)
-        gr = 0  # running grid row counter
-
-        # ---- Axis module assignments ----
-        grid.addWidget(self._bold_label('Axis modules'), gr, 0, 1, 2)
-        gr += 1
-
-        grid.addWidget(QtWidgets.QLabel(
-            '<i style="color:#aaa">Module names must match dashboard entries.<br>'
-            'Click "Sync from Settings" to fill from the Settings tree.<br>'
-            'Leave empty to exclude that axis.</i>'),
-            gr, 0, 1, 2)
-        gr += 1
-
+        # ── Section: Axis modules ─────────────────────────────────────────────
+        _mod_grid = QtWidgets.QGridLayout()
+        _mod_grid.setColumnStretch(1, 1)
+        _r = 0
+        _mod_grid.addWidget(QtWidgets.QLabel(
+            '<i style="color:#aaa">Names must match dashboard entries. '
+            'Leave empty to exclude. Use "Sync" to fill from Settings.</i>'),
+            _r, 0, 1, 2); _r += 1
         for label, attr, setting_key in [
                 ('X1 module:', 'ax_x1_mod_edit', 'x1_module'),
                 ('X2 module:', 'ax_x2_mod_edit', 'x2_module'),
                 ('X3 module:', 'ax_x3_mod_edit', 'x3_module')]:
-            grid.addWidget(QtWidgets.QLabel(label), gr, 0)
+            _mod_grid.addWidget(QtWidgets.QLabel(label), _r, 0)
             edit = QtWidgets.QLineEdit()
             edit.setPlaceholderText('module name (empty = skip)...')
             edit.setText(self.settings['ax_modules', setting_key])
-            edit.setToolTip(
-                f'DAQ_Move module for {label[:2]} axis. '
-                f'Leave empty to exclude from the stream.')
+            edit.setToolTip(f'DAQ_Move module for {label[:2]} axis.')
             setattr(self, attr, edit)
-            grid.addWidget(edit, gr, 1)
-            gr += 1
-
+            _mod_grid.addWidget(edit, _r, 1); _r += 1
         ax_sync_btn = QtWidgets.QPushButton('Sync from Settings')
-        ax_sync_btn.setToolTip('Fill module names from the Axis Move Modules group in Settings')
+        ax_sync_btn.setToolTip('Fill from Axis Move Modules in Settings')
         ax_sync_btn.clicked.connect(self._sync_ax_modules_from_settings)
-        grid.addWidget(ax_sync_btn, gr, 0, 1, 2)
-        gr += 1
+        _mod_grid.addWidget(ax_sync_btn, _r, 0, 1, 2)
+        lay.addWidget(self._make_collapsible_section(
+            'Axis modules', self._section_widget(_mod_grid), expanded=True))
 
-        sep = QtWidgets.QFrame()
-        sep.setFrameShape(QtWidgets.QFrame.HLine)
-        sep.setStyleSheet('color: #444;')
-        grid.addWidget(sep, gr, 0, 1, 2)
-        gr += 1
-
-        # Body-frame toggle
-        grid.addWidget(self._bold_label('Reference frame'), gr, 0, 1, 2)
-        gr += 1
-
+        # ── Section: Reference frame ──────────────────────────────────────────
+        _ref_grid = QtWidgets.QGridLayout()
+        _ref_grid.setColumnStretch(1, 1)
+        _r = 0
         self.ax_body_frame_chk = QtWidgets.QCheckBox('Direction in XY body frame')
         self.ax_body_frame_chk.setToolTip(
-            'When checked, the direction vector is interpreted in the rotating '
-            'XY stage body frame.\n'
-            'It is pre-multiplied by R(θ0) (current rotation angle) before '
-            'computing the move, so the physical motion direction is always '
-            'the same relative to the sample.\n\n'
+            'When checked, the direction vector is in the rotating XY body frame.\n'
+            'Pre-multiplied by R(theta0) so motion is fixed relative to the sample.\n'
             'When unchecked (default), the vector is in the lab frame.')
         self.ax_body_frame_chk.stateChanged.connect(self._update_axis_norm_label)
-        grid.addWidget(self.ax_body_frame_chk, gr, 0, 1, 2)
-        gr += 1
-
-        grid.addWidget(QtWidgets.QLabel('Rotation module:'), gr, 0)
+        _ref_grid.addWidget(self.ax_body_frame_chk, _r, 0, 1, 2); _r += 1
+        _ref_grid.addWidget(QtWidgets.QLabel('Rotation module:'), _r, 0)
         self.ax_rot_mod_edit = QtWidgets.QLineEdit()
-        self.ax_rot_mod_edit.setPlaceholderText('rotation module name…')
+        self.ax_rot_mod_edit.setPlaceholderText('rotation module name...')
         self.ax_rot_mod_edit.setText(self.settings['ax_modules', 'rot_module'])
         self.ax_rot_mod_edit.setToolTip(
-            'DAQ_Move module of the rotation stage.\n'
-            'Used only when "Direction in XY body frame" is checked.\n'
-            'Leave empty to disable body-frame mode.')
+            'DAQ_Move for the rotation stage.\n'
+            'Used only in body-frame mode.')
         self.ax_rot_mod_edit.textChanged.connect(self._update_axis_norm_label)
-        grid.addWidget(self.ax_rot_mod_edit, gr, 1)
-        gr += 1
-
-        grid.addWidget(QtWidgets.QLabel('Current θ (m-deg):'), gr, 0)
+        _ref_grid.addWidget(self.ax_rot_mod_edit, _r, 1); _r += 1
+        _ref_grid.addWidget(QtWidgets.QLabel('Current θ (m-deg):'), _r, 0)
         self.ax_theta_label = QtWidgets.QLabel('--')
         self.ax_theta_label.setStyleSheet(
             'font-family: monospace; color: #7ef; '
             'background: #111; padding: 2px 6px; border-radius: 3px;')
-        grid.addWidget(self.ax_theta_label, gr, 1)
-        gr += 1
+        _ref_grid.addWidget(self.ax_theta_label, _r, 1)
+        lay.addWidget(self._make_collapsible_section(
+            'Reference frame', self._section_widget(_ref_grid), expanded=False))
 
-        sep2 = QtWidgets.QFrame()
-        sep2.setFrameShape(QtWidgets.QFrame.HLine)
-        sep2.setStyleSheet('color: #444;')
-        grid.addWidget(sep2, gr, 0, 1, 2)
-        gr += 1
-
-        # Direction vector
-        grid.addWidget(self._bold_label('Direction vector  (v1, v2, v3)'), gr, 0, 1, 2)
-        gr += 1
-
+        # ── Section: Direction vector ─────────────────────────────────────────
+        _vec_grid = QtWidgets.QGridLayout()
+        _vec_grid.setColumnStretch(1, 1)
+        _r = 0
         for label, attr, default in [
                 ('v1:', 'ax_v1_spin', 1.0),
                 ('v2:', 'ax_v2_spin', 0.0),
                 ('v3:', 'ax_v3_spin', 0.0)]:
-            grid.addWidget(QtWidgets.QLabel(label), gr, 0)
+            _vec_grid.addWidget(QtWidgets.QLabel(label), _r, 0)
             spin = QtWidgets.QDoubleSpinBox()
             spin.setRange(-1e9, 1e9)
             spin.setDecimals(6)
@@ -620,28 +592,19 @@ class MCS2TrajectoryStreaming(CustomExt):
             spin.setValue(default)
             spin.valueChanged.connect(self._update_axis_norm_label)
             setattr(self, attr, spin)
-            grid.addWidget(spin, gr, 1)
-            gr += 1
-
-        grid.addWidget(QtWidgets.QLabel('As lab-frame unit v:'), gr, 0)
+            _vec_grid.addWidget(spin, _r, 1); _r += 1
+        _vec_grid.addWidget(QtWidgets.QLabel('Lab-frame unit v:'), _r, 0)
         self.ax_unit_label = QtWidgets.QLabel('--')
-        self.ax_unit_label.setStyleSheet(
-            'font-family: monospace; color: #a0e8a0;')
-        grid.addWidget(self.ax_unit_label, gr, 1)
-        gr += 1
+        self.ax_unit_label.setStyleSheet('font-family: monospace; color: #a0e8a0;')
+        _vec_grid.addWidget(self.ax_unit_label, _r, 1)
+        lay.addWidget(self._make_collapsible_section(
+            'Direction vector  (v1, v2, v3)', self._section_widget(_vec_grid), expanded=True))
 
-        sep3 = QtWidgets.QFrame()
-        sep3.setFrameShape(QtWidgets.QFrame.HLine)
-        sep3.setStyleSheet('color: #444;')
-        grid.addWidget(sep3, gr, 0, 1, 2)
-        gr += 1
-
-        # Move parameters
-        grid.addWidget(self._bold_label('Move parameters'), gr, 0, 1, 2)
-        gr += 1
-
-        # Absolute / relative toggle
-        grid.addWidget(QtWidgets.QLabel('Move type:'), gr, 0)
+        # ── Section: Move parameters ──────────────────────────────────────────
+        _prm_grid = QtWidgets.QGridLayout()
+        _prm_grid.setColumnStretch(1, 1)
+        _r = 0
+        _prm_grid.addWidget(QtWidgets.QLabel('Move type:'), _r, 0)
         _ax_move_type_w = QtWidgets.QWidget()
         _ax_move_type_lay = QtWidgets.QHBoxLayout()
         _ax_move_type_lay.setContentsMargins(0, 0, 0, 0)
@@ -650,145 +613,113 @@ class MCS2TrajectoryStreaming(CustomExt):
         self.ax_rel_radio = QtWidgets.QRadioButton('Relative')
         self.ax_rel_radio.setChecked(True)
         self.ax_abs_radio.setToolTip(
-            'Target is an absolute position along the direction vector (um).\n'
-            'The stage moves to: current + (target - current) * unit_v.\n'
-            'In practice this sets the signed distance from current position\n'
-            'to the target projected onto the direction vector.')
+            'Target is an absolute position along the direction vector (um).')
         self.ax_rel_radio.setToolTip(
-            'Target is a signed distance to travel along the direction\n'
-            'vector (um), resolved from the current position at compute time.')
+            'Target is a signed distance to travel along the direction vector (um).')
         self.ax_abs_radio.toggled.connect(self._update_ax_value_label)
         _ax_move_type_lay.addWidget(self.ax_abs_radio)
         _ax_move_type_lay.addWidget(self.ax_rel_radio)
         _ax_move_type_lay.addStretch()
-        grid.addWidget(_ax_move_type_w, gr, 1)
-        gr += 1
-
+        _prm_grid.addWidget(_ax_move_type_w, _r, 1); _r += 1
         self.ax_value_label_lbl = QtWidgets.QLabel('Distance (um):')
-        grid.addWidget(self.ax_value_label_lbl, gr, 0)
+        _prm_grid.addWidget(self.ax_value_label_lbl, _r, 0)
         self.ax_dist_spin = QtWidgets.QDoubleSpinBox()
         self.ax_dist_spin.setRange(-1e9, 1e9)
         self.ax_dist_spin.setDecimals(4)
         self.ax_dist_spin.setSingleStep(1.0)
         self.ax_dist_spin.setValue(100.0)
         self.ax_dist_spin.setToolTip(
-            'Relative mode: signed distance to travel along v (um).\n'
-            'Positive = forward along v, negative = backward.')
-        grid.addWidget(self.ax_dist_spin, gr, 1)
-        gr += 1
-
-        grid.addWidget(QtWidgets.QLabel('N Frames:'), gr, 0)
+            'Relative: signed distance along v (um).\n'
+            'Positive = forward, negative = backward.')
+        _prm_grid.addWidget(self.ax_dist_spin, _r, 1); _r += 1
+        _prm_grid.addWidget(QtWidgets.QLabel('N Frames:'), _r, 0)
         self.ax_nframes_spin = QtWidgets.QSpinBox()
         self.ax_nframes_spin.setRange(2, 1_000_000)
         self.ax_nframes_spin.setValue(500)
         self.ax_nframes_spin.setSingleStep(100)
         self.ax_nframes_spin.setToolTip(
-            'Number of trajectory frames to stream.\n'
-            'More frames = smoother motion at a given stream rate.\n'
-            'Duration = N / Stream Rate.')
+            'Number of frames to stream. More = smoother.\nDuration = N / Rate.')
         self.ax_nframes_spin.valueChanged.connect(self._update_ax_duration)
-        grid.addWidget(self.ax_nframes_spin, gr, 1)
-        gr += 1
-
-        grid.addWidget(QtWidgets.QLabel('Duration (s):'), gr, 0)
+        _prm_grid.addWidget(self.ax_nframes_spin, _r, 1); _r += 1
+        _prm_grid.addWidget(QtWidgets.QLabel('Duration (s):'), _r, 0)
         self.ax_duration_label = QtWidgets.QLabel('--')
         self.ax_duration_label.setStyleSheet('font-weight: bold;')
-        grid.addWidget(self.ax_duration_label, gr, 1)
-
-        lay.addLayout(grid)
+        _prm_grid.addWidget(self.ax_duration_label, _r, 1)
+        lay.addWidget(self._make_collapsible_section(
+            'Move parameters', self._section_widget(_prm_grid), expanded=True))
 
         self.settings.child('stream_settings', 'stream_rate'
                              ).sigValueChanged.connect(self._update_ax_duration)
         self._update_ax_duration()
         self._update_axis_norm_label()
 
-        # Position read-back
-        lay.addWidget(self._build_pos_readback_group(
-            labels=[
-                ('Current X1:', 'ax_x1_label', '#7ef'),
-                ('Current X2:', 'ax_x2_label', '#7ef'),
-                ('Current X3:', 'ax_x3_label', '#7ef'),
-                ('Target X1:', 'ax_t1_label', '#a0e8a0'),
-                ('Target X2:', 'ax_t2_label', '#a0e8a0'),
-                ('Target X3:', 'ax_t3_label', '#a0e8a0'),
-            ],
-            title='Stage positions (updated on Preview / Generate & Stream)',
-            ncols=3,
-        ))
+        # ── Section: Stage positions ──────────────────────────────────────────
+        lay.addWidget(self._make_collapsible_section(
+            'Stage positions',
+            self._build_pos_readback_group(
+                labels=[
+                    ('Current X1:', 'ax_x1_label', '#7ef'),
+                    ('Current X2:', 'ax_x2_label', '#7ef'),
+                    ('Current X3:', 'ax_x3_label', '#7ef'),
+                    ('Target X1:',  'ax_t1_label', '#a0e8a0'),
+                    ('Target X2:',  'ax_t2_label', '#a0e8a0'),
+                    ('Target X3:',  'ax_t3_label', '#a0e8a0'),
+                ],
+                title='', ncols=3),
+            expanded=False))
 
-        # Buttons
+        # ── Buttons ───────────────────────────────────────────────────────────
         btn_lay = QtWidgets.QHBoxLayout()
-
         self.ax_preview_btn = QtWidgets.QPushButton('Preview')
         self.ax_preview_btn.setMinimumHeight(44)
         self.ax_preview_btn.setStyleSheet(self._btn_style('#6f42c1', '#4b2d8f'))
-        self.ax_preview_btn.setToolTip(
-            'Compute trajectory and show in preview table -- no streaming')
+        self.ax_preview_btn.setToolTip('Compute trajectory and show in preview -- no streaming')
         self.ax_preview_btn.clicked.connect(self.preview_axis_move)
         btn_lay.addWidget(self.ax_preview_btn)
-
         self.ax_stream_btn = QtWidgets.QPushButton('Generate && Stream')
         self.ax_stream_btn.setMinimumHeight(44)
         self.ax_stream_btn.setStyleSheet(self._btn_style('#27ae60', '#1a7a42'))
-        self.ax_stream_btn.setToolTip(
-            'Build axis-move trajectory from current position and stream it')
+        self.ax_stream_btn.setToolTip('Build axis-move trajectory and stream it')
         self.ax_stream_btn.clicked.connect(self.generate_and_stream_axis_move)
         btn_lay.addWidget(self.ax_stream_btn)
-
         lay.addLayout(btn_lay)
         lay.addStretch()
         self.docks['axis_move'].addWidget(w)
 
+
     # Rotation Compensation dock
     def _build_rotation_comp_dock(self):
-        """Build the Rotation Compensation dock.
-
-        Generates a coordinated (X, Y, theta) trajectory that keeps the target
-        fixed in the lab frame while the rotation stage sweeps.
-
-        Physical model:
-            xy_cmd(theta) = R(θ0 - theta) * (x0, y0)
-
-        When XY = (0, 0) the correction is zero -- pure rotation.
-        All rotation angles in the GUI use milli-degrees (m-deg), matching
-        the native unit of the MCS2 rotary axis plugin.
-        """
+        """Build the Rotation Compensation dock with collapsible sections."""
         w = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout()
-        lay.setSpacing(8)
+        lay.setSpacing(2)
         w.setLayout(lay)
 
-        # Info banner
-        info = QtWidgets.QLabel(
+        # ── Help toggle ───────────────────────────────────────────────────────
+        _rc_help_btn, _rc_help_panel = self._make_help_toggle(
             '<b>Rotation compensation with XY correction</b><br>'
-            'Sweeps the rotation stage from its current angle to a target '
-            'angle while commanding the XY stage to keep the sample fixed '
-            'in the lab frame.<br><br>'
-            '<b>Convention:</b> XY = (0, 0) means the target is exactly on '
-            'the rotation axis -- pure rotation, no XY correction needed.  '
-            'Any non-zero XY position offsets the target, and this dock '
-            'generates the compensating trajectory.<br><br>'
-            '<tt>xy_cmd(theta) = R(θ0 - theta) * (x0, y0)</tt><br>'
-            'All rotation angles are in <b>milli-degrees (m-deg)</b>.'
-        )
-        info.setWordWrap(True)
-        info.setStyleSheet(self._info_style('#1a1a2e', '#a0c4ff', '#2c4a8f'))
-        lay.addWidget(info)
+            'Sweeps the rotation stage to a target angle while moving XY to '
+            'keep the sample fixed in the lab frame.<br><br>'
+            '<b>Convention:</b> XY=(0,0) = target on rotation axis (pure '
+            'rotation). Non-zero XY offsets the target; this dock compensates.<br>'
+            '<tt>xy_cmd(theta) = R(theta0 - theta) * (x0, y0)</tt><br>'
+            'All angles in <b>milli-degrees (m-deg)</b>. '
+            'Set R offset to correct axis misalignment.',
+            ('#1a1a2e', '#a0c4ff', '#2c4a8f'))
+        _rc_help_row = QtWidgets.QHBoxLayout()
+        _rc_help_row.addWidget(_rc_help_btn)
+        _rc_help_row.addStretch()
+        lay.addLayout(_rc_help_row)
+        lay.addWidget(_rc_help_panel)
 
-        grid = QtWidgets.QGridLayout()
-        grid.setColumnStretch(1, 1)
-        row = 0
-
-        # ---- Axis module assignments ----
-        grid.addWidget(self._bold_label('Axis modules'), row, 0, 1, 2)
-        row += 1
-
-        grid.addWidget(QtWidgets.QLabel(
-            '<i style="color:#aaa">Module names must match dashboard entries.<br>'
-            'Click "Sync from Settings" to fill from the Settings tree.</i>'),
-            row, 0, 1, 2)
-        row += 1
-
+        # ── Section: Axis modules ─────────────────────────────────────────────
+        _mod_grid = QtWidgets.QGridLayout()
+        _mod_grid.setColumnStretch(1, 1)
+        _r = 0
+        _mod_grid.addWidget(QtWidgets.QLabel(
+            '<i style="color:#aaa">Names must match dashboard entries. '
+            'Use "Sync" to fill from Settings.</i>'),
+            _r, 0, 1, 2); _r += 1
         for label, attr, setting_key, tip in [
             ('X module:',     'rc_x_mod_edit',  'x_module',
              'DAQ_Move module name for the X linear axis'),
@@ -797,82 +728,56 @@ class MCS2TrajectoryStreaming(CustomExt):
             ('Theta module:', 'rc_th_mod_edit', 'theta_module',
              'DAQ_Move module name for the rotation stage'),
         ]:
-            grid.addWidget(QtWidgets.QLabel(label), row, 0)
+            _mod_grid.addWidget(QtWidgets.QLabel(label), _r, 0)
             edit = QtWidgets.QLineEdit()
-            edit.setPlaceholderText('module name…')
+            edit.setPlaceholderText('module name...')
             edit.setText(self.settings['rc_modules', setting_key])
             edit.setToolTip(tip)
             setattr(self, attr, edit)
-            grid.addWidget(edit, row, 1)
-            row += 1
-
+            _mod_grid.addWidget(edit, _r, 1); _r += 1
         sync_btn = QtWidgets.QPushButton('Sync from Settings')
-        sync_btn.setToolTip('Fill module names from the RC Axis Modules group in Settings')
+        sync_btn.setToolTip('Fill from RC Axis Modules in Settings')
         sync_btn.clicked.connect(self._sync_rc_modules_from_settings)
-        grid.addWidget(sync_btn, row, 0, 1, 2)
-        row += 1
+        _mod_grid.addWidget(sync_btn, _r, 0, 1, 2)
+        lay.addWidget(self._make_collapsible_section(
+            'Axis modules', self._section_widget(_mod_grid), expanded=True))
 
-        sep = QtWidgets.QFrame()
-        sep.setFrameShape(QtWidgets.QFrame.HLine)
-        sep.setStyleSheet('color: #444;')
-        grid.addWidget(sep, row, 0, 1, 2)
-        row += 1
-
-        # ---- Axis alignment offset (body frame, polar) ----
-        grid.addWidget(self._bold_label('Axis alignment offset (body frame)'), row, 0, 1, 2)
-        row += 1
-
-        offset_info = QtWidgets.QLabel(
-            '<i style="color:#aaa">'
-            'Displacement from the rotation axis to the XY stage zero, in the '
-            'body frame (polar coords). Set to zero if XY=0 is perfectly on '
-            'the rotation axis. Tune R and phi experimentally: rotate at XY=0 '
-            'and adjust until the target holds still.'
-            '</i>'
-        )
-        offset_info.setWordWrap(True)
-        grid.addWidget(offset_info, row, 0, 1, 2)
-        row += 1
-
-        grid.addWidget(QtWidgets.QLabel('R offset (um):'), row, 0)
+        # ── Section: Axis alignment offset ────────────────────────────────────
+        _off_grid = QtWidgets.QGridLayout()
+        _off_grid.setColumnStretch(1, 1)
+        _r = 0
+        _off_grid.addWidget(QtWidgets.QLabel(
+            '<i style="color:#aaa">Rotate at XY=0 and adjust R/phi until '
+            'target holds still. Set R=0 if alignment is perfect.</i>'),
+            _r, 0, 1, 2); _r += 1
+        _off_grid.addWidget(QtWidgets.QLabel('R offset (um):'), _r, 0)
         self.rc_r_spin = QtWidgets.QDoubleSpinBox()
         self.rc_r_spin.setRange(0.0, 1e8)
         self.rc_r_spin.setDecimals(1)
         self.rc_r_spin.setSingleStep(100.0)
         self.rc_r_spin.setValue(0.0)
         self.rc_r_spin.setToolTip(
-            'Radial distance from the rotation axis to the XY stage zero position\n'
-            'in the rotating body frame (um).\n'
-            'Start at 0 (ideal) and increase if the target drifts during rotation\n'
-            'even when XY = (0, 0).')
-        grid.addWidget(self.rc_r_spin, row, 1)
-        row += 1
-
-        grid.addWidget(QtWidgets.QLabel('phi offset (deg):'), row, 0)
+            'Radial distance from the rotation axis to the XY stage zero (um).\n'
+            'Increase if the target drifts during rotation at XY=(0,0).')
+        _off_grid.addWidget(self.rc_r_spin, _r, 1); _r += 1
+        _off_grid.addWidget(QtWidgets.QLabel('phi offset (deg):'), _r, 0)
         self.rc_phi_spin = QtWidgets.QDoubleSpinBox()
         self.rc_phi_spin.setRange(-360.0, 360.0)
         self.rc_phi_spin.setDecimals(2)
         self.rc_phi_spin.setSingleStep(1.0)
         self.rc_phi_spin.setValue(0.0)
         self.rc_phi_spin.setToolTip(
-            'Angle of the offset vector in the body frame (degrees).\n'
-            'Measured from the body-frame X axis.\n'
-            'Tune this to set the direction of the rotation-axis misalignment.')
-        grid.addWidget(self.rc_phi_spin, row, 1)
-        row += 1
+            'Direction of the offset vector in the body frame (degrees).\n'
+            'Measured from the body-frame X axis.')
+        _off_grid.addWidget(self.rc_phi_spin, _r, 1)
+        lay.addWidget(self._make_collapsible_section(
+            'Axis alignment offset', self._section_widget(_off_grid), expanded=False))
 
-        sep2 = QtWidgets.QFrame()
-        sep2.setFrameShape(QtWidgets.QFrame.HLine)
-        sep2.setStyleSheet('color: #444;')
-        grid.addWidget(sep2, row, 0, 1, 2)
-        row += 1
-
-        # ---- Rotation parameters ----
-        grid.addWidget(self._bold_label('Rotation parameters'), row, 0, 1, 2)
-        row += 1
-
-        # Absolute / relative toggle
-        grid.addWidget(QtWidgets.QLabel('Move type:'), row, 0)
+        # ── Section: Rotation parameters ──────────────────────────────────────
+        _rot_grid = QtWidgets.QGridLayout()
+        _rot_grid.setColumnStretch(1, 1)
+        _r = 0
+        _rot_grid.addWidget(QtWidgets.QLabel('Move type:'), _r, 0)
         _move_type_w = QtWidgets.QWidget()
         _move_type_lay = QtWidgets.QHBoxLayout()
         _move_type_lay.setContentsMargins(0, 0, 0, 0)
@@ -881,80 +786,63 @@ class MCS2TrajectoryStreaming(CustomExt):
         self.rc_rel_radio = QtWidgets.QRadioButton('Relative')
         self.rc_abs_radio.setChecked(False)
         self.rc_rel_radio.setChecked(True)
-        self.rc_abs_radio.setToolTip(
-            'Target angle is an absolute position in m-deg.\n'
-            'The stage moves to exactly this angle.')
-        self.rc_rel_radio.setToolTip(
-            'Target angle is a signed offset in m-deg added to the current\n'
-            'angle.  Actual target = θ0 + value, resolved at compute time.')
+        self.rc_abs_radio.setToolTip('Move to this exact angle (m-deg).')
+        self.rc_rel_radio.setToolTip('Add this offset to the current angle (m-deg).')
         self.rc_abs_radio.toggled.connect(self._update_rc_angle_tip)
         _move_type_lay.addWidget(self.rc_abs_radio)
         _move_type_lay.addWidget(self.rc_rel_radio)
         _move_type_lay.addStretch()
-        grid.addWidget(_move_type_w, row, 1)
-        row += 1
-
-        grid.addWidget(QtWidgets.QLabel('Target angle (m-deg):'), row, 0)
+        _rot_grid.addWidget(_move_type_w, _r, 1); _r += 1
+        _rot_grid.addWidget(QtWidgets.QLabel('Target angle (m-deg):'), _r, 0)
         self.rc_theta_end_spin = QtWidgets.QDoubleSpinBox()
         self.rc_theta_end_spin.setRange(-36_000_000.0, 36_000_000.0)
         self.rc_theta_end_spin.setDecimals(1)
-        self.rc_theta_end_spin.setSingleStep(1000.0)   # 1 degree steps
-        self.rc_theta_end_spin.setValue(500.0)      # default 500 milli-degrees
+        self.rc_theta_end_spin.setSingleStep(1000.0)
+        self.rc_theta_end_spin.setValue(500.0)
         self.rc_theta_end_spin.setToolTip(
-            'Absolute mode: target angle in milli-degrees.\n'
-            'Relative mode: signed offset from current angle in milli-degrees.\n'
+            'Absolute: target angle (m-deg).\n'
+            'Relative: offset from current angle (m-deg).\n'
             '1 degree = 1000 m-deg.')
-        grid.addWidget(self.rc_theta_end_spin, row, 1)
-        row += 1
-
-        grid.addWidget(QtWidgets.QLabel('N Frames:'), row, 0)
+        _rot_grid.addWidget(self.rc_theta_end_spin, _r, 1); _r += 1
+        _rot_grid.addWidget(QtWidgets.QLabel('N Frames:'), _r, 0)
         self.rc_nframes_spin = QtWidgets.QSpinBox()
         self.rc_nframes_spin.setRange(2, 1_000_000)
         self.rc_nframes_spin.setValue(500)
         self.rc_nframes_spin.setSingleStep(100)
-        self.rc_nframes_spin.setToolTip(
-            'Number of trajectory frames to stream.\n'
-            'More frames = smoother motion at a given stream rate.\n'
-            'Duration = N / Stream Rate.')
+        self.rc_nframes_spin.setToolTip('Number of frames. More = smoother.\nDuration = N / Rate.')
         self.rc_nframes_spin.valueChanged.connect(self._update_rc_duration)
-        grid.addWidget(self.rc_nframes_spin, row, 1)
-        row += 1
-
-        grid.addWidget(QtWidgets.QLabel('Duration (s):'), row, 0)
+        _rot_grid.addWidget(self.rc_nframes_spin, _r, 1); _r += 1
+        _rot_grid.addWidget(QtWidgets.QLabel('Duration (s):'), _r, 0)
         self.rc_duration_label = QtWidgets.QLabel('--')
         self.rc_duration_label.setStyleSheet('font-weight: bold;')
-        grid.addWidget(self.rc_duration_label, row, 1)
-        row += 1
+        _rot_grid.addWidget(self.rc_duration_label, _r, 1)
+        lay.addWidget(self._make_collapsible_section(
+            'Rotation parameters', self._section_widget(_rot_grid), expanded=True))
 
         self.settings.child('stream_settings', 'stream_rate'
                              ).sigValueChanged.connect(self._update_rc_duration)
-
-        lay.addLayout(grid)
         self._update_rc_duration()
 
-        # ---- Position read-back ----
-        lay.addWidget(self._build_pos_readback_group(
-            labels=[
-                ('Current X (um):',      'rc_x0_label',  '#7ef'),
-                ('Current Y (um):',      'rc_y0_label',  '#7ef'),
-                ('Current θ (m-deg):',   'rc_th0_label', '#7ef'),
-                ('Target X (um):',       'rc_xt_label',  '#a0e8a0'),
-                ('Target Y (um):',       'rc_yt_label',  '#a0e8a0'),
-                ('Target θ (m-deg):',    'rc_tht_label', '#a0e8a0'),
-            ],
-            title='Stage positions (updated on Preview / Generate & Stream)',
-            ncols=3,
-        ))
+        # ── Section: Stage positions ──────────────────────────────────────────
+        lay.addWidget(self._make_collapsible_section(
+            'Stage positions',
+            self._build_pos_readback_group(
+                labels=[
+                    ('Current X (um):',    'rc_x0_label',  '#7ef'),
+                    ('Current Y (um):',    'rc_y0_label',  '#7ef'),
+                    ('Current θ (m-deg):', 'rc_th0_label', '#7ef'),
+                    ('Target X (um):',     'rc_xt_label',  '#a0e8a0'),
+                    ('Target Y (um):',     'rc_yt_label',  '#a0e8a0'),
+                    ('Target θ (m-deg):',  'rc_tht_label', '#a0e8a0'),
+                ],
+                title='', ncols=3),
+            expanded=False))
 
-        # ---- Trajectory stats ----
-        stats_group = QtWidgets.QGroupBox('Trajectory statistics')
-        stats_group.setStyleSheet(
-            'QGroupBox { font-weight: bold; color: #ccc; '
-            'border: 1px solid #555; border-radius: 4px; margin-top: 6px; }'
-            'QGroupBox::title { subcontrol-origin: margin; left: 8px; }')
-        stats_lay = QtWidgets.QGridLayout()
-        stats_group.setLayout(stats_lay)
-
+        # ── Section: Trajectory statistics ───────────────────────────────────
+        _stat_w = QtWidgets.QWidget()
+        _stat_lay = QtWidgets.QGridLayout()
+        _stat_lay.setContentsMargins(4, 4, 4, 4)
+        _stat_w.setLayout(_stat_lay)
         for i, (label, attr) in enumerate([
             ('Max |DX| (um):', 'rc_stat_dx'),
             ('Max |DY| (um):', 'rc_stat_dy'),
@@ -962,35 +850,31 @@ class MCS2TrajectoryStreaming(CustomExt):
             ('phi_body (deg):', 'rc_stat_phi'),
         ]):
             r, c = divmod(i, 2)
-            stats_lay.addWidget(QtWidgets.QLabel(label), r, c * 2)
+            _stat_lay.addWidget(QtWidgets.QLabel(label), r, c * 2)
             lbl = self._make_readback_label('#fbbf24')
             setattr(self, attr, lbl)
-            stats_lay.addWidget(lbl, r, c * 2 + 1)
+            _stat_lay.addWidget(lbl, r, c * 2 + 1)
+        lay.addWidget(self._make_collapsible_section(
+            'Trajectory statistics', _stat_w, expanded=False))
 
-        lay.addWidget(stats_group)
-
-        # ---- Buttons ----
+        # ── Buttons ───────────────────────────────────────────────────────────
         btn_lay = QtWidgets.QHBoxLayout()
-
         self.rc_preview_btn = QtWidgets.QPushButton('Preview')
         self.rc_preview_btn.setMinimumHeight(44)
         self.rc_preview_btn.setStyleSheet(self._btn_style('#6f42c1', '#4b2d8f'))
-        self.rc_preview_btn.setToolTip(
-            'Compute compensation trajectory and show in preview -- no streaming')
+        self.rc_preview_btn.setToolTip('Compute trajectory and show in preview -- no streaming')
         self.rc_preview_btn.clicked.connect(self.preview_rotation_comp)
         btn_lay.addWidget(self.rc_preview_btn)
-
         self.rc_stream_btn = QtWidgets.QPushButton('Generate && Stream')
         self.rc_stream_btn.setMinimumHeight(44)
         self.rc_stream_btn.setStyleSheet(self._btn_style('#e67e22', '#b85a0a'))
-        self.rc_stream_btn.setToolTip(
-            'Build rotation-compensation trajectory from current positions and stream it')
+        self.rc_stream_btn.setToolTip('Build rotation-compensation trajectory and stream it')
         self.rc_stream_btn.clicked.connect(self.generate_and_stream_rotation_comp)
         btn_lay.addWidget(self.rc_stream_btn)
-
         lay.addLayout(btn_lay)
         lay.addStretch()
         self.docks['rot_comp'].addWidget(w)
+
 
     # UI helpers
     def _build_pos_readback_group(
@@ -1033,6 +917,152 @@ class MCS2TrajectoryStreaming(CustomExt):
     def _info_style(bg: str, fg: str, border: str) -> str:
         return (f'background: {bg}; color: {fg}; '
                 f'border: 1px solid {border}; border-radius: 4px; padding: 8px;')
+    
+    @staticmethod
+    def _make_help_toggle(html: str, style_args: tuple) -> Tuple[QtWidgets.QWidget, QtWidgets.QWidget]:
+        """Return (toggle_btn_widget, collapsible_help_widget).
+
+        The toggle button is a small '? Help' button that shows/hides the help
+        panel.  Both widgets should be added to the dock layout by the caller;
+        the help widget starts hidden so the dock is compact by default.
+
+        Parameters
+        ----------
+        html       : HTML string for the help label content.
+        style_args : (bg, fg, border) passed to _info_style.
+        """
+        # Help label inside a container so it can be hidden as one unit
+        container = QtWidgets.QWidget()
+        c_lay = QtWidgets.QVBoxLayout()
+        c_lay.setContentsMargins(0, 0, 0, 0)
+        container.setLayout(c_lay)
+        lbl = QtWidgets.QLabel(html)
+        lbl.setWordWrap(True)
+        bg, fg, border = style_args
+        lbl.setStyleSheet(
+            f'background: {bg}; color: {fg}; '
+            f'border: 1px solid {border}; border-radius: 4px; padding: 8px;')
+        c_lay.addWidget(lbl)
+        container.setVisible(False)
+
+        # Toggle button
+        btn = QtWidgets.QPushButton('? Help')
+        btn.setCheckable(True)
+        btn.setChecked(False)
+        btn.setMaximumWidth(70)
+        btn.setStyleSheet(
+            'QPushButton { font-size: 9pt; padding: 2px 6px; '
+            'border: 1px solid #555; border-radius: 4px; '
+            'background: #2a2a2a; color: #aaa; }'
+            'QPushButton:checked { background: #3a3a4a; color: #a0c4ff; '
+            'border-color: #5566aa; }'
+            'QPushButton:hover { background: #333; }')
+        btn.toggled.connect(container.setVisible)
+
+        return btn, container    
+
+    @staticmethod
+    def _make_collapsible_section(
+            title: str,
+            content: QtWidgets.QWidget,
+            expanded: bool = True,
+    ) -> QtWidgets.QWidget:
+        """Wrap *content* in a collapsible section with a clickable header.
+
+        The header is a full-width toggle button showing '▼ title' (expanded)
+        or '▶ title' (collapsed).  Clicking it shows/hides *content*.
+
+        Returns the outer container widget (header + content stacked).
+        """
+        outer = QtWidgets.QWidget()
+        outer_lay = QtWidgets.QVBoxLayout()
+        outer_lay.setContentsMargins(0, 0, 0, 0)
+        outer_lay.setSpacing(0)
+        outer.setLayout(outer_lay)
+
+        header = QtWidgets.QPushButton(f'{"▼" if expanded else "▶"}  {title}')
+        header.setCheckable(True)
+        header.setChecked(expanded)
+        header.setFlat(True)
+        header.setCursor(QtWidgets.QApplication.instance().style().standardCursor(
+            QtWidgets.QStyle.CursorShape.ArrowCursor)
+            if hasattr(QtWidgets.QStyle, 'CursorShape') else
+            QtWidgets.QApplication.instance().overrideCursor() or
+            QtGui.QCursor(QtCore.Qt.ArrowCursor))
+        header.setStyleSheet(
+            'QPushButton {'
+            '  text-align: left;'
+            '  font-weight: bold; font-size: 10pt; color: #ccc;'
+            '  background: #252525;'
+            '  border: none; border-bottom: 1px solid #444;'
+            '  padding: 4px 6px;'
+            '}'
+            'QPushButton:checked { color: #eee; background: #2c2c2c; }'
+            'QPushButton:hover   { background: #303030; }')
+
+        content.setVisible(expanded)
+
+        def _toggle(checked, btn=header, widget=content):
+            widget.setVisible(checked)
+            btn.setText(f'{"▼" if checked else "▶"}  {title}')
+
+        header.toggled.connect(_toggle)
+
+        outer_lay.addWidget(header)
+        outer_lay.addWidget(content)
+        return outer
+
+    @staticmethod
+    def _section_widget(grid: QtWidgets.QGridLayout) -> QtWidgets.QWidget:
+        """Wrap a QGridLayout in a plain widget with standard margins."""
+        w = QtWidgets.QWidget()
+        grid.setContentsMargins(4, 4, 4, 4)
+        w.setLayout(grid)
+        return w
+
+
+        """Return (toggle_btn_widget, collapsible_help_widget).
+
+        The toggle button is a small '? Help' button that shows/hides the help
+        panel.  Both widgets should be added to the dock layout by the caller;
+        the help widget starts hidden so the dock is compact by default.
+
+        Parameters
+        ----------
+        html       : HTML string for the help label content.
+        style_args : (bg, fg, border) passed to _info_style.
+        """
+        # Help label inside a container so it can be hidden as one unit
+        container = QtWidgets.QWidget()
+        c_lay = QtWidgets.QVBoxLayout()
+        c_lay.setContentsMargins(0, 0, 0, 0)
+        container.setLayout(c_lay)
+        lbl = QtWidgets.QLabel(html)
+        lbl.setWordWrap(True)
+        bg, fg, border = style_args
+        lbl.setStyleSheet(
+            f'background: {bg}; color: {fg}; '
+            f'border: 1px solid {border}; border-radius: 4px; padding: 8px;')
+        c_lay.addWidget(lbl)
+        container.setVisible(False)
+
+        # Toggle button
+        btn = QtWidgets.QPushButton('? Help')
+        btn.setCheckable(True)
+        btn.setChecked(False)
+        btn.setMaximumWidth(70)
+        btn.setStyleSheet(
+            'QPushButton { font-size: 9pt; padding: 2px 6px; '
+            'border: 1px solid #555; border-radius: 4px; '
+            'background: #2a2a2a; color: #aaa; }'
+            'QPushButton:checked { background: #3a3a4a; color: #a0c4ff; '
+            'border-color: #5566aa; }'
+            'QPushButton:hover { background: #333; }')
+        btn.toggled.connect(container.setVisible)
+
+        return btn, container
+
+
 
     def _update_ax_duration(self):
         """Update the duration label in the axis move dock."""
